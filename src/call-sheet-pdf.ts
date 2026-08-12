@@ -173,7 +173,13 @@ export function renderCallSheetPDF(
     if (l.enriched_phone && String(l.enriched_phone) !== String(l.phone ?? ""))
       phones.push({ n: winAnsi(String(l.enriched_phone)), web: true });
     const emails: { a: string; web: boolean }[] = [];
-    if (l.email) emails.push({ a: winAnsi(String(l.email)), web: !!l.email_source_url });
+    if (l.email) emails.push({ a: winAnsi(String(l.email)), web: l.email_source === "web" });
+    // Social profiles + personal-context notes (enrichment upgrade 2026-08-14):
+    // both come from the shared call-list row builder (src/call-list-export.ts),
+    // which only surfaces non-DNC, source-backed findings.
+    const socials: { p: string; u: string }[] = Array.isArray(l.socials) ? l.socials.slice(0, 3).map((s: any) => ({ p: winAnsi(String(s.platform || "social")), u: winAnsi(clip(String(s.url || ""), 56)) })) : [];
+    const socialsMore = Array.isArray(l.socials) && l.socials.length > 3 ? l.socials.length - 3 : 0;
+    const contexts: string[] = Array.isArray(l.context) ? l.context.slice(0, 2).map((c: string) => winAnsi(clip(String(c), 88))) : [];
     const status =
       winAnsi(
         [String(l.source ?? ""), l.market_status ? String(l.market_status) : ""]
@@ -193,9 +199,15 @@ export function renderCallSheetPDF(
     for (const p of phones) phonesH += measure(p.n, 10.5, RIGHT_W) + 2;
     let emailsH = 0;
     for (const e of emails) emailsH += measure(e.a, 10.5, RIGHT_W) + 2;
+    let socialsH = 0;
+    for (const s of socials) socialsH += measure(`${s.p}  ${s.u}`, 8.5, RIGHT_W) + 2;
+    if (socialsMore > 0) socialsH += 12;
+    let contextsH = 0;
+    for (const c of contexts) contextsH += measure(c, 8, RIGHT_W) + 3;
     const statusH = measure(status, 9.5, RIGHT_W);
     const rightH =
-      pad + nameH + 4 + (phonesH > 0 ? phonesH : 12) + (emailsH > 0 ? emailsH : 0) + 16 + statusH + pad;
+      pad + nameH + 4 + (phonesH > 0 ? phonesH : 12) + (emailsH > 0 ? emailsH : 0) +
+      (socialsH > 0 ? 14 + socialsH : 0) + (contextsH > 0 ? 12 + contextsH : 0) + 16 + statusH + pad;
 
     const cardH = Math.max(leftH, rightH);
     ensure(cardH + 12);
@@ -254,6 +266,25 @@ export function renderCallSheetPDF(
     for (const e of emails) {
       write(`${e.a}${e.web ? "   (web)" : ""}`, rx, ry, RIGHT_W, 10.5, false, DARK);
       ry += measure(e.a, 10.5, RIGHT_W) + 2;
+    }
+    if (socials.length > 0) {
+      ry += 8;
+      write("Socials", rx, ry, RIGHT_W, 8, true, FAINT);
+      ry += 10;
+      for (const s of socials) {
+        write(`${s.p}  ${s.u}`, rx, ry, RIGHT_W, 8.5, false, MUTED);
+        ry += measure(`${s.p}  ${s.u}`, 8.5, RIGHT_W) + 2;
+      }
+      if (socialsMore > 0) { write(`+${socialsMore} more`, rx, ry, RIGHT_W, 8, false, FAINT); ry += 12; }
+    }
+    if (contexts.length > 0) {
+      ry += 6;
+      write("Context", rx, ry, RIGHT_W, 8, true, FAINT);
+      ry += 10;
+      for (const c of contexts) {
+        write(c, rx, ry, RIGHT_W, 8, false, MUTED);
+        ry += measure(c, 8, RIGHT_W) + 3;
+      }
     }
     ry += 16;
     write(status, rx, ry, RIGHT_W, 9.5, true, MUTED);

@@ -69,6 +69,57 @@ function mentionsPerson(text: string, lead?: EnrichLead): boolean {
 }
 const socialRe = /https?:\/\/(?:www\.)?(facebook\.com|instagram\.com|linkedin\.com|tiktok\.com\/[^\s<>"']+|youtube\.com\/[^\s<>"']+|(?:x|twitter)\.com\/[^\s<>"']+)/ig;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ── Personal-context capture (2026-08-14) ────────────────────────────────────
+// Short factual snippets literally on the source page about the person
+// (profession, interests, pets, affiliations). Rules: the sentence must mention
+// the lead's last name (or full name) AND contain a context keyword; the
+// snippet is kept verbatim from page text (whitespace-collapsed, clipped to
+// ~160 chars). Nothing is ever inferred, guessed, or synthesized — if a page
+// has no qualifying sentence, nothing is stored. Runs over already-fetched page
+// text, so it costs zero extra network calls.
+const CONTEXT_KEYWORDS = /(?:profession|occupation|career|works (?:as|at)|attorney|lawyer|doctor|physician|surgeon|professor|teacher|nurse|realtor|broker|agent|founder|ceo|president|owner|director|manager|partner|engineer|architect|consultant|entrepreneur|author|artist|musician|photographer|coach|sailing|sailor|golf|tennis|hiking|biking|cycling|running|marathon|yoga|painting|photography|music|guitar|piano|violin|dog|cat|pets|golden retriever|labrador|volunteer|board member|trustee|church|synagogue|retired|retiree|grandchildren|graduated|university|college|club)/i;
+const CONTEXT_MAX_SNIPPETS = 3;
+const CONTEXT_MAX_LEN = 160;
+export function extractContext(text: string, lead?: EnrichLead): string[] {
+  if (!lead || !mentionsPerson(text, lead)) return [];
+  const parts = String(lead.contact_name || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
+  const firstName = parts[0] || "";
+  const fullName = parts.join(" ");
+  const town = String(lead.town || "").trim().toLowerCase();
+  const hay = String(text || "").replace(/\s+/g, " ").trim();
+  if (!hay) return [];
+  // Paragraph-level verification: a paragraph is "about the lead" when it
+  // contains the last name AND (the first name OR the lead's town OR the full
+  // name). This keeps pronoun-continuation sentences ("She owns a golden
+  // retriever…") while rejecting same-last-name strangers (a "Knetzger in
+  // California" paragraph never mentions the lead's town/first name).
+  const aboutLead = (para: string) => {
+    const p = para.toLowerCase();
+    const hasLastName = lastName.length >= 4 && p.includes(lastName);
+    if (!hasLastName) return false;
+    if (firstName.length >= 3 && p.includes(firstName)) return true;
+    if (town.length >= 3 && p.includes(town)) return true;
+    return fullName.length >= 8 && p.includes(fullName);
+  };
+  const out: string[] = [];
+  // Trafilatura markdown separates paragraphs with blank lines; a page with no
+  // blank lines is treated as one paragraph. Each paragraph must independently
+  // pass aboutLead(), so pronoun-continuation sentences are captured only when
+  // the lead is named in the same paragraph.
+  for (const para of hay.split(/\n\s*\n/).map(s => s.trim()).filter(s => s.length > 0)) {
+    if (!aboutLead(para)) continue;
+    for (const s of para.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 0)) {
+      if (out.length >= CONTEXT_MAX_SNIPPETS) break;
+      if (!CONTEXT_KEYWORDS.test(s.toLowerCase())) continue;
+      const clean = s.replace(/\s+/g, " ").trim();
+      out.push(clean.length > CONTEXT_MAX_LEN ? clean.slice(0, CONTEXT_MAX_LEN - 1) + "…" : clean);
+    }
+    if (out.length >= CONTEXT_MAX_SNIPPETS) break;
+  }
+  return [...new Set(out)].slice(0, CONTEXT_MAX_SNIPPETS);
+}
 // DDG health gate: after a DuckDuckGo failure/timeout we mark it down for
 // DDG_DOWN_MS; while down, the search step goes straight to searchBing and
 // skips searchDuck entirely (saves ~6s × query angles per lead while DDG is
@@ -176,6 +227,18 @@ export async function enrichOne(lead: EnrichLead) { const provider = providerNam
       else { if (!ddgDown()) { try { result = await searchDuck(query,page); if (!result.pages.length) throw new Error("DuckDuckGo returned no results"); markDdgUp(); } catch (e) { markDdgDown(); try { result = await searchBing(query); if (!result.pages.length) throw new Error("Bing returned no results"); used = "bing"; } catch (e2) { errors.push(`${query}: duckduckgo & bing unavailable (${String(e)}; ${String(e2)})`); continue; } } } else { try { result = await searchBing(query); if (!result.pages.length) throw new Error("Bing returned no results"); used = "bing"; } catch (e2) { errors.push(`${query}: duckduckgo down (skipped) & bing unavailable (${String(e2)})`); continue; } } }
       providers.add(used); const corpus=[...result.pages]; const remain=ENRICH_DEPTH.maxCandidatePages-candidates; for (const p of result.pages.filter(p=>validScrapeUrl(p.url)).slice(0, Math.max(0,remain))) { const markdown=used === "firecrawl" ? await scrapeFirecrawl(p.url) : await scrapeTrafilatura(p.url); candidates++; if(markdown) corpus.push({url:p.url,text:markdown,title:p.title}); if(candidates>=ENRICH_DEPTH.maxCandidatePages) break; await wait(ENRICH_DEPTH.requestDelayMs); }
       for (const raw of extract(corpus, query, lead)) { const kind=raw.phone?"phone":raw.email?"email":"social", value=raw.phone?digits(raw.phone):raw.email?emailNorm(raw.email):raw.socials[0]?.url || "", key=`${kind}|${value}|${raw.source_url}`; if(seen.has(key) || counts[kind] >= (kind === "phone" ? ENRICH_DEPTH.maxPhones : kind === "email" ? ENRICH_DEPTH.maxEmails : ENRICH_DEPTH.maxSocials)) continue; seen.add(key); const matched=dnc(raw.phone,raw.email)?1:0, f={...raw,dnc_matched:matched,provider:used}; findings.push(f); counts[kind]++; db.run("INSERT INTO enriched_contacts(lead_id,phone,email,socials,source_url,query,dnc_matched,created_at) VALUES(?,?,?,?,?,?,?,?)",lead.id,raw.phone||null,raw.email||null,JSON.stringify(raw.socials),raw.source_url,query,matched,new Date().toISOString()); }
+      // Personal-context capture: verbatim snippets from pages already fetched
+      // above (zero extra network). One row per gated page that has context,
+      // deduped by (lead_id, context_source_url) so repeat query angles can't
+      // double-insert. dnc_matched=0 (context is not contact info).
+      for (const page of corpus) {
+        if (page.text.length < 300) continue; // search-result snippets are too thin to be context
+        const snippets = extractContext(page.text, lead);
+        if (!snippets.length) continue;
+        const dupCtx = db.query<any>("SELECT id FROM enriched_contacts WHERE lead_id=? AND context_source_url=? AND context IS NOT NULL LIMIT 1").get(lead.id, page.url);
+        if (dupCtx) continue;
+        db.run("INSERT INTO enriched_contacts(lead_id,phone,email,socials,source_url,query,dnc_matched,created_at,context,context_source_url) VALUES(?,?,?,?,?,?,?,?,?,?)", lead.id, null, null, "[]", page.url, query, 0, new Date().toISOString(), snippets.join(" | "), page.url);
+      }
       if(candidates>=ENRICH_DEPTH.maxCandidatePages) break; await wait(ENRICH_DEPTH.requestDelayMs);
     } if(candidates>=ENRICH_DEPTH.maxCandidatePages) break; }
   return { findings, queries:queries.length, providers:[...providers], errors };

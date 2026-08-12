@@ -1,5 +1,5 @@
 // Outreach stage 1 — extractor hardening unit checks (run: bun verify-extractor.ts)
-import { extract, isValidEmail, normalizePhone, type EnrichLead } from "./src/enrich";
+import { extract, extractContext, isValidEmail, normalizePhone, type EnrichLead } from "./src/enrich";
 
 let pass = 0, fail = 0;
 const check = (label: string, ok: boolean) => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}`); ok ? pass++ : fail++; };
@@ -95,6 +95,20 @@ check("GATE: town-matching page yields m.bennett@stamford.gov", emails.includes(
 check("GATE: celebrity/union emails still absent even when a matching page is present", !emails.includes("julie.andrews@hollywood.com") && !emails.includes("info@nmteachersunion.org"));
 check("GATE: real phones (203) 555-0177 / 555-0188 kept", phones.includes("(203) 555-0177") && phones.includes("(203) 555-0188"));
 check("GATE: celebrity phone (310) 555-0199 dropped", !phones.includes("(310) 555-0199"));
+
+// ── Personal-context capture (2026-08-14) ─────────────────────────────────
+const contextLead: EnrichLead = { id: 1, contact_name: "Diane Knetzger", town: "New Canaan", state: "CT" };
+const contextPage =
+  "Diane Knetzger is a professional photographer in New Canaan. She owns a golden retriever and volunteers with the New Canaan Chamber of Commerce. Her studio is on Main Street. The weather in New Canaan was sunny today.";
+const contextSnippets = extractContext(contextPage, contextLead);
+check("CONTEXT: captures profession snippet verbatim", contextSnippets.some(c => c.includes("professional photographer")));
+check("CONTEXT: captures pet snippet verbatim", contextSnippets.some(c => c.includes("golden retriever")));
+check("CONTEXT: ignores non-context sentence (weather)", !contextSnippets.some(c => c.includes("weather")));
+check("CONTEXT: caps at 3 snippets", contextSnippets.length <= 3);
+const noContextPage = "New Canaan is a great place to live. The train station is convenient. Schools are highly rated.";
+check("CONTEXT: stores nothing when page has no personal facts", extractContext(noContextPage, contextLead).length === 0);
+const wrongPersonPage = "The Knetzger family moved away. A famous photographer named Knetzger lives in California and owns two cats.";
+check("CONTEXT: snippet must mention the lead's name, not just a keyword", extractContext(wrongPersonPage, contextLead).length === 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

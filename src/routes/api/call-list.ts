@@ -1,4 +1,49 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { db } from "~/db";
 import { getUserFromRequest, unauthorized } from "~/auth";
-export const Route=createFileRoute("/api/call-list")({server:{handlers:{GET:({request})=>{ if(!getUserFromRequest(request)) return unauthorized();const leads=db.query<any>(`SELECT l.*, e.phone AS enriched_phone, e.source_url AS enriched_source FROM imported_leads l LEFT JOIN enriched_contacts e ON e.id=(SELECT id FROM enriched_contacts WHERE lead_id=l.id AND phone IS NOT NULL AND phone!='' AND dnc_matched=0 ORDER BY id ASC LIMIT 1) WHERE l.dnc_matched=0 AND l.agent_attached=0 AND l.listed_active=0 AND l.listed_pending=0 AND l.closed_recently=0 AND l.source NOT IN ('active','pending','closed') AND (COALESCE(NULLIF(l.phone,''),e.phone) IS NOT NULL) AND COALESCE(NULLIF(l.phone,''),e.phone)!='' ORDER BY l.score DESC,l.id DESC`).all();const esc=(v:any)=>`"${String(v??"").replace(/"/g,'""')}"`;const header=["score","source","contact_name","phone","phone_source","email","town","property_address","agent_attached","market_status","never_relisted","score_summary"];const lines=[header.join(","),...leads.map(l=>{const phone=l.phone||l.enriched_phone;const summary=Object.entries(l.score_breakdown?JSON.parse(l.score_breakdown):{}).map(([k,v])=>`${k}: ${v}`).join("; ")+ (l.enriched_source?`; Web source: ${l.enriched_source}`:"");return [l.score,l.source,l.contact_name,phone,l.phone?"import":"web",l.email,l.town,l.property_address,l.agent_attached||0,l.market_status||"",l.never_relisted||0,summary].map(esc).join(",")})];return new Response(lines.join("\r\n")+"\r\n",{headers:{"Content-Type":"text/csv; charset=utf-8","Content-Disposition":"attachment; filename=leadforge-call-list.csv"}});}}}});
+import { callListRows, socialsLabel, contextLabel } from "~/call-list-export";
+
+// Call-list CSV export. Rows come from the shared builder (src/call-list-export.ts)
+// so CSV and PDF can never drift; DNC suppression is re-applied at export time
+// against the live dnc_entries table (see builder). Columns include the new
+// enrichment surface: email (+source), socials, and personal-context notes.
+export const Route = createFileRoute("/api/call-list")({
+  server: {
+    handlers: {
+      GET: ({ request }) => {
+        if (!getUserFromRequest(request)) return unauthorized();
+        const leads = callListRows();
+        const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        const header = [
+          "score", "source", "contact_name", "phone", "phone_source",
+          "email", "email_source", "socials", "context",
+          "town", "property_address", "agent_attached", "market_status",
+          "never_relisted", "score_summary",
+        ];
+        const lines = [
+          header.join(","),
+          ...leads.map(l => {
+            const summary =
+              Object.entries(l.score_breakdown ? JSON.parse(l.score_breakdown) : {})
+                .map(([k, v]) => `${k}: ${v}`).join("; ") +
+              (l.enriched_source ? `; Web source: ${l.enriched_source}` : "") +
+              (l.email_source_url ? `; Email source: ${l.email_source_url}` : "");
+            return [
+              l.score, l.source, l.contact_name, l.phone, l.phone_source,
+              l.email, l.email_source,
+              socialsLabel(l.socials || []),
+              contextLabel(l.context || []),
+              l.town, l.property_address, l.agent_attached || 0,
+              l.market_status || "", l.never_relisted || 0, summary,
+            ].map(esc).join(",");
+          }),
+        ];
+        return new Response(lines.join("\r\n") + "\r\n", {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": "attachment; filename=leadforge-call-list.csv",
+          },
+        });
+      },
+    },
+  },
+});
