@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body {
+    @apply bg-[#0b0e14] text-slate-200 antialiased;
+  }
+  ::selection {
+    background: rgba(251, 191, 36, 0.28);
+    color: #fef3c7;
+  }
+  /* Dark scrollbars for the dark UI */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3140 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2a3140;
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Carbon-fiber weave: tight ±45° fiber highlights + a soft 12px weave grid
+   over a deep slate-black base, with a faint amber glow from the top-right.
+   Subtle by design — texture should read, not shout. */
+.carbon-bg {
+  background-color: #0b0e14;
+  background-image:
+    /* diagonal fiber strands (light) */
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.032) 0px,
+      rgba(255, 255, 255, 0.032) 1px,
+      rgba(255, 255, 255, 0.006) 1px,
+      rgba(255, 255, 255, 0.006) 3px,
+      transparent 3px,
+      transparent 5px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.026) 0px,
+      rgba(255, 255, 255, 0.026) 1px,
+      rgba(255, 255, 255, 0.005) 1px,
+      rgba(255, 255, 255, 0.005) 3px,
+      transparent 3px,
+      transparent 5px
+    ),
+    /* weave square grid (shadow) */
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.22) 0px,
+      rgba(0, 0, 0, 0.22) 1px,
+      transparent 1px,
+      transparent 12px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.22) 0px,
+      rgba(0, 0, 0, 0.22) 1px,
+      transparent 1px,
+      transparent 12px
+    ),
+    /* ambient glow + base gradient */
+    radial-gradient(1100px 700px at 72% -12%, rgba(245, 158, 11, 0.06), transparent 62%),
+    linear-gradient(180deg, #0d1117 0%, #080a0f 100%);
+}
+
+/* Metallic silver text treatment for eyebrow labels */
+.silver-label {
+  background: linear-gradient(180deg, #e8ecf2 0%, #9aa4b2 55%, #c6cdd8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* Rendered blog/article body (Shakespeare reader) — markdownToHtml output */
+.content-article h1, .content-article h2, .content-article h3 {
+  font-weight: 700; color: #fff; letter-spacing: -0.01em; line-height: 1.3; margin: 1.4em 0 0.5em;
+}
+.content-article h1 { font-size: 1.35rem; }
+.content-article h2 { font-size: 1.15rem; }
+.content-article h3 { font-size: 1rem; }
+.content-article p { margin: 0.6em 0; }
+.content-article ul, .content-article ol { margin: 0.6em 0; padding-left: 1.4em; }
+.content-article li { margin: 0.25em 0; }
+.content-article a { color: #fcd34d; text-decoration: underline; }
+.content-article blockquote { border-left: 3px solid rgba(245, 158, 11, 0.5); margin: 0.8em 0; padding: 0.1em 0 0.1em 0.9em; color: #cbd5e1; }
+.content-article code { background: rgba(255, 255, 255, 0.07); border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.85em; color: #fcd34d; }
+.content-article hr { border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 1.2em 0; }
