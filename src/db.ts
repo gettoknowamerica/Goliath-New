@@ -56,6 +56,14 @@ db.run(`CREATE TABLE IF NOT EXISTS enriched_contacts (
  id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, phone TEXT, email TEXT, socials TEXT,
  source_url TEXT, query TEXT, dnc_matched INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 )`);
+// Personal-context capture columns (2026-08-14): verbatim short facts about the
+// person found on the source page (profession, interests, pets, affiliations).
+// context holds 1–3 snippets joined with " | ", context_source_url is the page
+// they were literally read from. Idempotent for DBs created by older versions.
+const ecColumns = db.query<any>("PRAGMA table_info(enriched_contacts)").all().map(c => c.name);
+for (const [name, definition] of [["context", "TEXT"], ["context_source_url", "TEXT"]] as const) {
+  if (!ecColumns.includes(name)) db.run(`ALTER TABLE enriched_contacts ADD COLUMN ${name} ${definition}`);
+}
 // Background enrichment runs: one row per POST /api/enrich start. A module-level
 // worker in src/enrich-worker.ts advances the row (processed/found/dnc_suppressed,
 // cursor, current_lead_id) as it enriches leads one at a time, so clients can

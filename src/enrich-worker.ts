@@ -37,8 +37,64 @@ export function promoteBestEmail(leadId: number, sinceIso?: string): string | nu
   if (!valid.length) return null;
   valid.sort((a, b) => ((EMAIL_SOURCE_JUNK.test(a.source_url) ? 1 : 0) - (EMAIL_SOURCE_JUNK.test(b.source_url) ? 1 : 0)) || (a.id - b.id));
   const best = valid[0];
-  db.run("UPDATE imported_leads SET email=?, email_source_url=?, email_verified=0 WHERE id=?", best.email, best.source_url, leadId);
+  // email_verified=1: the address was extracted verbatim from the source page by
+  // the person-gated extractor (it literally appears in the fetched page text).
+  // This is a SOURCE-verified flag, not a deliverability guarantee — the send
+  // path still requires the owner's explicit approval of the final text.
+  db.run("UPDATE imported_leads SET email=?, email_source_url=?, email_verified=1 WHERE id=?", best.email, best.source_url, leadId);
   return best.email;
+}
+
+// ── One-time email writeback backfill (2026-08-14) ───────────────────────────
+// Root cause of the "27 found / 3 written" gap: every enriched_contacts email
+// row in the current DB was created 2026-08-10/08-11 — BEFORE the person-match
+// gate and promoteBestEmail existed (added 08-11 with the background worker).
+// Promotion only considers FRESH findings (created_at >= run start), so those
+// pre-gate rows were never promoted; the stale-enriched_at reset cleared those
+// leads for re-enrichment, but the full pipeline run hasn't happened yet.
+// This backfill promotes the best non-DNC email per lead WITHOUT the freshness
+// filter, re-verifying person match cheaply via the source URL (the URL path
+// contains the lead's last name or town — strong signal the page is about them;
+// the full pipeline run will still apply the stricter text-level gate when it
+// re-enriches). Aggregator/directory sources are deprioritized exactly like the
+// forward path. It deliberately does NOT stamp enriched_at: those leads stay
+// eligible for the full run, which adds phones/socials/context and keeps the
+// promoted email (promotion skips leads that already have one). Idempotent +
+// app_flags marker, so it runs exactly once.
+function urlMentionsPerson(url: string, lead: any): boolean {
+  try {
+    const u = new URL(String(url || ""));
+    const hay = (u.hostname + " " + u.pathname).toLowerCase().replace(/[^a-z0-9 ]/g, " ");
+    const parts = String(lead?.contact_name || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const lastName = parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
+    if (lastName.length >= 4 && hay.includes(lastName)) return true;
+    const town = String(lead?.town || "").trim().toLowerCase();
+    if (town.length >= 3 && hay.includes(town)) return true;
+    return false;
+  } catch { return false; }
+}
+export function backfillPromoteEmails(): { promoted: number; checked: number } {
+  const marker = db.query<any>("SELECT value FROM app_flags WHERE key='email_backfill_v1'").get();
+  if (marker) return { promoted: 0, checked: 0 };
+  const candidates = db.query<any>(`SELECT id, contact_name, town FROM imported_leads
+    WHERE (email IS NULL OR email='') AND EXISTS (
+      SELECT 1 FROM enriched_contacts e WHERE e.lead_id=imported_leads.id AND e.dnc_matched=0
+        AND e.email IS NOT NULL AND e.email != '')`).all();
+  let promoted = 0;
+  for (const lead of candidates) {
+    const rows = db.query<any>("SELECT id, email, source_url FROM enriched_contacts WHERE lead_id=? AND dnc_matched=0 AND email IS NOT NULL AND email != '' ORDER BY id ASC").all(lead.id);
+    const valid = rows.filter(r => isValidEmail(r.email));
+    if (!valid.length) continue;
+    const matched = valid.filter(r => urlMentionsPerson(r.source_url, lead));
+    if (!matched.length) continue; // URL doesn't vouch for the person — leave for the full run's text gate
+    matched.sort((a, b) => ((EMAIL_SOURCE_JUNK.test(a.source_url) ? 1 : 0) - (EMAIL_SOURCE_JUNK.test(b.source_url) ? 1 : 0)) || (a.id - b.id));
+    const best = matched[0];
+    db.run("UPDATE imported_leads SET email=?, email_source_url=?, email_verified=1 WHERE id=?", best.email, best.source_url, lead.id);
+    promoted++;
+  }
+  db.run("INSERT INTO app_flags (key, value, created_at) VALUES ('email_backfill_v1', ?, ?)", String(promoted), new Date().toISOString());
+  console.log(`[backfill] email promotion backfill complete: ${promoted} lead(s) promoted (${candidates.length} candidate leads)`);
+  return { promoted, checked: candidates.length };
 }
 
 // Any 'running' row left behind by a previous server life is dead — the worker
@@ -58,6 +114,10 @@ function latestRun(): EnrichRunRow | null {
 export function startEnrichRun(opts: { mode: "batch" | "all"; limit?: number; cursor?: number }): { runId: number; alreadyRunning: boolean } {
   const existing = activeRun();
   if (existing) return { runId: existing.id, alreadyRunning: true };
+  // One-time email writeback backfill for pre-gate findings (no-op after the
+  // first run thanks to the app_flags marker). Runs BEFORE the worker so the
+  // owner's pipeline run starts from an already-promoted email baseline.
+  try { backfillPromoteEmails(); } catch (e) { console.error("[enrich] email backfill failed:", e); }
   const limit = opts.mode === "batch" ? Math.max(1, Math.floor(opts.limit ?? 1)) : null;
   const result = db.run(
     "INSERT INTO enrich_runs(status,mode,\"limit\",cursor,processed,found,dnc_suppressed,current_lead_id,error,stop_requested,created_at,updated_at,finished_at) VALUES('running',?,?,?,0,0,0,NULL,NULL,0,?,?,NULL)",
