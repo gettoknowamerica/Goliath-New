@@ -76,6 +76,11 @@ async function appFetch(req: Request, injectBase: boolean): Promise<Response> {
 
 async function serveStaticOrHandler(pathname: string, req: Request): Promise<Response> {
   if (pathname !== "/") {
+    // Directory index: /epk-hero/ → serve /epk-hero/index.html if present.
+    if (pathname.endsWith("/")) {
+      const index = Bun.file(CLIENT_DIR + pathname + "index.html");
+      if (await index.exists()) return new Response(index);
+    }
     const file = Bun.file(CLIENT_DIR + pathname);
     if (await file.exists()) return new Response(file);
   }
@@ -130,6 +135,10 @@ for (let attempt = 1; ; attempt++) {
         }
         // 3. Root-level static assets the SSR HTML references (/assets/*,
         //    /exports/*, /downloads/*, favicon …).
+        if (pathname.endsWith("/")) {
+          const index = Bun.file(CLIENT_DIR + pathname + "index.html");
+          if (await index.exists()) return new Response(index);
+        }
         const staticFile = Bun.file(CLIENT_DIR + pathname);
         if (pathname !== "/" && (await staticFile.exists())) {
           return new Response(staticFile);
