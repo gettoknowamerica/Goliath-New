@@ -60,11 +60,25 @@ export function normalizePhone(value: string): string | null {
 function mentionsPerson(text: string, lead?: EnrichLead): boolean {
   if (!lead) return true;
   const hay = String(text || "").toLowerCase();
-  const parts = String(lead.contact_name || "").trim().toLowerCase().split(/\s+/);
+  const parts = String(lead.contact_name || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!parts.length) return false;
+  const firstName = parts[0] || "";
   const lastName = parts.length > 1 ? parts[parts.length - 1] : parts[0] || "";
+  const fullName = parts.join(" ");
   const town = String(lead.town || "").trim().toLowerCase();
-  if (lastName.length >= 4 && hay.includes(lastName)) return true;
-  if (town.length >= 3 && hay.includes(town)) return true;
+  // STRONG person signal only. The old `lastName OR town` matched common English
+  // words (White/Black/Green) or any town-specific page, then attached every phone
+  // on that page to the lead — wrong-person numbers (e.g. a Wikipedia page's
+  // numbers attributed to a Fairfield County homeowner). Now require the last name
+  // AND at least one co-occurring anchor (first name, the full name, or the town).
+  if (lastName.length >= 4 && hay.includes(lastName)) {
+    if (firstName.length >= 3 && firstName !== lastName && hay.includes(firstName)) return true;
+    if (fullName.length >= 8 && hay.includes(fullName)) return true;
+    if (town.length >= 3 && hay.includes(town)) return true;
+    // Single-token names (e.g. "O'Hare") can't co-occur with a first name; keep
+    // them if the name is uncommon enough that presence is a real signal.
+    if (firstName === lastName && lastName.length >= 5) return true;
+  }
   return false;
 }
 const socialRe = /https?:\/\/(?:www\.)?(facebook\.com|instagram\.com|linkedin\.com|tiktok\.com\/[^\s<>"']+|youtube\.com\/[^\s<>"']+|(?:x|twitter)\.com\/[^\s<>"']+)/ig;
